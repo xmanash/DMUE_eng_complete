@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  dmue-api:
+    build: .
+    container_name: dmue_api
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - PROJECT_NAME=Dynamic Micro-Underwriting Engine
+      - CHROMA_PERSIST_DIR=/app/data/chroma_db
+    restart: always
+
+  dmue-dashboard:
+    build: .
+    container_name: dmue_dashboard
+    command: streamlit run app/ui/dashboard.py --server.port 8501 --server.address 0.0.0.0
+    ports:
+      - "8501:8501"
+    depends_on:
+      - dmue-api
+    environment:
+      - DMUE_API_URL=http://dmue-api:8000
+    restart: always
+
+  dmue-mcp:
+    build: .
+    container_name: dmue_mcp_server
+    command: python -m app.mcp_server.server
+    stdin_open: true
+    tty: true
+    restart: always
