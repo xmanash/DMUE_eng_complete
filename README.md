@@ -1,6 +1,12 @@
 # Dynamic Micro-Underwriting Engine (DMUE)
 
-DMUE scores driving, home moisture, weather, and vegetation health, then bounds the monthly premium at **+25% / −20%** versus the prior premium. The product spec is [PRD.md](PRD.md). The request path is [Architecture.md](Architecture.md).
+## Executive summary
+
+Traditional actuarial underwriting prices policies from static demographic proxies such as age, gender, credit score, and ZIP code, usually once a year. That lags real behavior and makes the price hard to explain.
+
+DMUE prices from behavior instead. It accepts telematics, home moisture, weather, and a satellite bounding box, scores risk from 0 to 100, and reprices the monthly premium inside state filing limits. Each quote records why the price moved, checks the explanation for prohibited factors and plain language, and stores the event for later recall.
+
+The product spec is [PRD.md](PRD.md). The request path is [Architecture.md](Architecture.md). Month-over-month premiums stay inside **+25% / −20%** of the prior premium.
 
 ## What you can run
 
