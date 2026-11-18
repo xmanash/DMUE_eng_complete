@@ -1,0 +1,25 @@
+# Usage: docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build -d
+# Requires .env with DMUE_ENV=production and DMUE_API_KEY set.
+# Put TLS in front (deploy/Caddyfile). Do not publish these ports on a public interface.
+
+services:
+  dmue-api:
+    env_file:
+      - .env
+    environment:
+      DMUE_ENV: production
+      AUTH_REQUIRED: "true"
+      CHROMA_PERSIST_DIR: /app/data/chroma_db
+    ports:
+      - "127.0.0.1:8000:8000"
+    restart: unless-stopped
+
+  dmue-dashboard:
+    env_file:
+      - .env
+    environment:
+      DMUE_ENV: production
+      DMUE_API_URL: http://dmue-api:8000
+    ports:
+      - "127.0.0.1:8501:8501"
+    restart: unless-stopped

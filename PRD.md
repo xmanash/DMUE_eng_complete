@@ -1,7 +1,7 @@
 # Dynamic Micro-Underwriting Engine (DMUE)
 
 Product requirement document  
-Status: Approved / production specification  
+Status: Core specification (guided demo ready; not a production bind)  
 Version: 1.0.0  
 Target release: Open source AI underwriting core
 
@@ -13,8 +13,12 @@ dmue-engine/
 ├── Architecture.md                   # System architecture
 ├── README.md                         # Setup for local and Docker runs
 ├── requirements.txt                  # Python dependencies
-├── docker-compose.yml                # API, dashboard, and MCP services
-├── Dockerfile                        # Multi-stage image
+├── docker-compose.yml                # API and dashboard (MCP profile)
+├── docker-compose.prod.yml           # Loopback ports and required API key
+├── Dockerfile                        # Multi-stage image, non-root user
+├── DEMO.md                           # Guided demo script
+├── DEPLOY.md                         # Single-node TLS and secrets
+├── fixtures/demo/                    # Seeded quote payloads
 ├── app/
 │   ├── main.py                       # FastAPI gateway
 │   ├── core/
@@ -23,14 +27,28 @@ dmue-engine/
 │   │   ├── risk_engine.py            # Behavioral risk math
 │   │   ├── guardrails.py             # Anomaly filter, rate clamp, factor audit
 │   │   ├── evals.py                  # Leakage, coverage, and reading-ease checks
+│   │   ├── governance.py             # Quote log, audit hook, decision records
 │   │   ├── memory.py                 # ChromaDB episodic store
+│   │   ├── ratelimit.py              # Per-process token bucket
+│   │   ├── cache.py                  # TTL context and satellite cache
+│   │   ├── jobs.py                   # In-process ingest queue
+│   │   ├── circuit.py                # Satellite circuit breaker
+│   │   ├── routing.py                # Named model routes
+│   │   ├── cost.py                   # Per-quote USD ledger
+│   │   ├── observability.py          # Local traces, optional LangSmith
+│   │   ├── auth.py                   # API key and CORS helpers
 │   │   └── satellite_processor.py    # Deterministic NDVI / NDWI
+│   ├── harness.py                    # Evaluation harness for PRD cases
 │   ├── mcp_server/
 │   │   └── server.py                 # MCP stdio server
 │   └── ui/
 │       └── dashboard.py              # Streamlit underwriter workbench
 └── tests/
-    └── test_risk_engine.py           # TC-01 through TC-05 and guardrail tests
+    ├── test_risk_engine.py           # TC-01 through TC-05 and guardrail tests
+    ├── test_governance.py            # Allow, eval-block, hook veto, harness
+    ├── test_runtime.py               # 429, ingest job, cache, circuit
+    ├── test_ops.py                   # Routes, cost, traces
+    └── test_auth.py                  # API key and production startup
 ```
 
 ## 1. Executive summary
@@ -49,14 +67,14 @@ DMUE prices from behavior instead. It accepts telematics, home moisture, weather
 
 | ID | Area | Description | Priority | Where it lives |
 | --- | --- | --- | --- | --- |
-| FR-01 | Telemetry ingestion | Accept telematics, IoT moisture, weather, and a satellite bounding box, one event or a batch. | P0 | `POST /api/v1/reprice`, `POST /api/v1/ingest` |
+| FR-01 | Telemetry ingestion | Accept telematics, IoT moisture, weather, and a satellite bounding box, one event or a batch. | P0 | `POST /api/v1/reprice` (sync), `POST /api/v1/ingest` (202 job) |
 | FR-02 | Deterministic risk math | Score behavior from 0 to 100 and apply the premium multiplier. | P0 | `app/core/risk_engine.py` |
 | FR-03 | Regulatory guardrails | Keep the premium inside the prior premium's +25% / −20% band. | P0 | `ActuarialGuardrailEnforcer.enforce_rate_caps` |
 | FR-04 | Vector episodic memory | Store each quote and recall it by `policy_id`. | P1 | `app/core/memory.py` |
 | FR-05 | Agentic MCP interface | Expose repricing and recall as MCP tools over JSON-RPC 2.0. | P1 | `app/mcp_server/server.py` |
 | FR-06 | Satellite processor | Compute NDVI and NDWI and add vegetation stress to the score. | P1 | `app/core/satellite_processor.py` |
 
-Ingestion is an HTTP request. `POST /api/v1/reprice` takes one event. `POST /api/v1/ingest` takes a JSON list of events. There is no separate message broker.
+Ingestion is an HTTP request. `POST /api/v1/reprice` takes one event and prices it in the request. `POST /api/v1/ingest` takes a JSON list, returns **202**, and prices events on an in-process asyncio queue. Poll `GET /api/v1/jobs/{job_id}`. There is no Redis. A full queue returns **503**. `/api/v1/*` returns **429** when the process token bucket is empty.
 
 ### Ingest fields
 
@@ -180,7 +198,7 @@ Every quote evaluates the policyholder paragraph:
 2. **Factor coverage** must be **at least 0.50**. Coverage is the share of math-engine drivers whose text appears in the explanation.
 3. **Flesch-Kincaid reading ease** must be **at least 60**, and the grade level must be **at most 8**.
 
-Scores are returned on the quote as `evals`. Reason lines are short sentences so the standard TC-01 text passes.
+Scores are returned on the quote as `evals`. Reason lines are short sentences so the standard TC-01 text passes. A miss on any of the three gates blocks the quote. Nothing is stored. The response records `explanation_eval` as `block`.
 
 ## 9. Test matrix
 
@@ -193,6 +211,14 @@ Scores are returned on the quote as `evals`. Reason lines are short sentences so
 | TC-05 | MCP `tools/call` `reprice_policy_micro_underwrite` | JSON-RPC 2.0 result whose text payload includes `final_bounded_premium` |
 
 `tests/test_risk_engine.py` also covers the hard-brake fault, impossible night ratio, prohibited key and prohibited wording, and the three eval thresholds.
+
+The same cases plus eval thresholds and prohibited-key rejection run as a harness:
+
+```bash
+python -m app.harness
+```
+
+The command prints one JSON report. Exit code 1 means a case failed. `tests/test_governance.py` checks allow, eval-block, and hook veto.
 
 ## 10. Development and quickstart
 
@@ -209,6 +235,7 @@ streamlit run app/ui/dashboard.py
 
 # Tests
 pytest tests/
+python -m app.harness
 ```
 
 On Windows, activate a virtualenv with `venv\Scripts\activate`. On macOS or Linux, use `source venv/bin/activate`.

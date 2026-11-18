@@ -1,0 +1,9 @@
+{
+  "policy_id": "POL-98234",
+  "previous_premium": 120,
+  "hard_brakes_per_100mi": 1,
+  "night_miles_pct": 0.1,
+  "speed_violations": 0,
+  "gender": "not-used",
+  "model_route": "dmue-full-v1"
+}

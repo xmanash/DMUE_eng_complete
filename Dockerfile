@@ -9,10 +9,15 @@ FROM python:3.11-slim
 WORKDIR /app
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libgomp1 \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --uid 10001 --shell /usr/sbin/nologin dmue
+
 COPY --from=builder /install /usr/local
 COPY app ./app
-RUN mkdir -p /app/data
+RUN mkdir -p /app/data \
+    && chown -R dmue:dmue /app
+
+USER dmue
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \

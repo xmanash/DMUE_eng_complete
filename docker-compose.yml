@@ -3,15 +3,29 @@ version: '3.8'
 services:
   dmue-api:
     build: .
-    container_name: dmue_api
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers ${UVICORN_WORKERS:-1}
     ports:
       - "8000:8000"
     volumes:
       - ./data:/app/data
     environment:
-      - PROJECT_NAME=Dynamic Micro-Underwriting Engine
-      - CHROMA_PERSIST_DIR=/app/data/chroma_db
+      PROJECT_NAME: Dynamic Micro-Underwriting Engine
+      DMUE_ENV: ${DMUE_ENV:-local}
+      CHROMA_PERSIST_DIR: /app/data/chroma_db
+      DMUE_API_KEY: ${DMUE_API_KEY:-}
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:8501}
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/', timeout=2).read()",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 8
+      start_period: 20s
     restart: always
 
   dmue-dashboard:
@@ -21,9 +35,12 @@ services:
     ports:
       - "8501:8501"
     depends_on:
-      - dmue-api
+      dmue-api:
+        condition: service_healthy
     environment:
-      - DMUE_API_URL=http://dmue-api:8000
+      DMUE_API_URL: http://dmue-api:8000
+      DMUE_ENV: ${DMUE_ENV:-local}
+      DMUE_API_KEY: ${DMUE_API_KEY:-}
     restart: always
 
   dmue-mcp:
@@ -32,4 +49,6 @@ services:
     command: python -m app.mcp_server.server
     stdin_open: true
     tty: true
+    profiles:
+      - mcp
     restart: always

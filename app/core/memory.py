@@ -1,6 +1,8 @@
 import hashlib
+import os
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -48,6 +50,49 @@ class HashEmbeddingFunction(EmbeddingFunction[Documents]):
         return "cosine"
 
 
+class PersistLock:
+    """Exclusive file lock so workers on one volume do not write Chroma together."""
+
+    def __init__(self, persist_dir: str):
+        self.path = Path(persist_dir) / ".chroma.lock"
+        self._handle = None
+
+    def __enter__(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._handle = open(self.path, "a+b")
+        self._handle.seek(0)
+        if self._handle.read(1) == b"":
+            self._handle.write(b"0")
+            self._handle.flush()
+        self._handle.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(self._handle.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(self._handle.fileno(), fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if self._handle is None:
+            return
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                self._handle.seek(0)
+                msvcrt.locking(self._handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(self._handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            self._handle.close()
+            self._handle = None
+
+
 def _client(persist_dir: str):
     if chromadb is None:
         raise RuntimeError("chromadb is not installed")
@@ -60,6 +105,7 @@ class PolicyMemoryManager:
     def __init__(self, persist_dir: Optional[str] = None):
         path = persist_dir or settings.CHROMA_PERSIST_DIR
         self.persist_dir = path
+        self._lock = PersistLock(path)
         self.client = _client(path)
         embedder = HashEmbeddingFunction()
         try:
@@ -89,32 +135,34 @@ class PolicyMemoryManager:
             f"{policy_id}|{document}|{uuid.uuid4()}".encode("utf-8")
         ).hexdigest()[:16]
         recorded_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        self.collection.add(
-            documents=[document],
-            metadatas=[
-                {
-                    "policy_id": policy_id,
-                    "risk_score": float(risk_score),
-                    "premium": float(premium),
-                    "recorded_at": recorded_at,
-                }
-            ],
-            ids=[f"{policy_id}_{digest}"],
-        )
+        with self._lock:
+            self.collection.add(
+                documents=[document],
+                metadatas=[
+                    {
+                        "policy_id": policy_id,
+                        "risk_score": float(risk_score),
+                        "premium": float(premium),
+                        "recorded_at": recorded_at,
+                    }
+                ],
+                ids=[f"{policy_id}_{digest}"],
+            )
         return f"{policy_id}_{digest}"
 
     def get_policy_context(self, policy_id: str, limit: int = 3) -> Dict[str, Any]:
-        found = self.collection.get(where={"policy_id": policy_id})
-        ids = found.get("ids") or []
-        if not ids:
-            return {"documents": [], "metadatas": [], "ids": []}
+        with self._lock:
+            found = self.collection.get(where={"policy_id": policy_id})
+            ids = found.get("ids") or []
+            if not ids:
+                return {"documents": [], "metadatas": [], "ids": []}
 
-        n_results = min(max(int(limit), 1), len(ids))
-        results = self.collection.query(
-            query_texts=[f"Historical underwriting and safety risk for policy {policy_id}"],
-            n_results=n_results,
-            where={"policy_id": policy_id},
-        )
+            n_results = min(max(int(limit), 1), len(ids))
+            results = self.collection.query(
+                query_texts=[f"Historical underwriting and safety risk for policy {policy_id}"],
+                n_results=n_results,
+                where={"policy_id": policy_id},
+            )
         return {
             "documents": (results.get("documents") or [[]])[0],
             "metadatas": (results.get("metadatas") or [[]])[0],

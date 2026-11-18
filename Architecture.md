@@ -13,10 +13,12 @@ flowchart TD
   sat[NDVI and NDWI when bbox is present]
   text[Policyholder sentences and recommendations]
   g3[Guardrail 3 prohibited-language audit]
-  evals[Leakage coverage and reading-ease checks]
-  g2[Guardrail 2 rate clamp]
+  evals[Output eval gate]
+  g2[Policy rate clamp]
+  logLine[Structured quote log]
+  hooks[Governance hooks]
   memory[Chroma policy_telemetry_history]
-  ingest --> g1 --> auto --> env --> sat --> text --> g3 --> evals --> g2 --> memory
+  ingest --> g1 --> auto --> env --> sat --> text --> g3 --> evals --> g2 --> logLine --> hooks --> memory
 ```
 
 `app/core/quote.py` owns this sequence. `app/main.py` and `app/mcp_server/server.py` call `quote_policy` and do not score on their own.
@@ -32,6 +34,11 @@ flowchart TD
 | `app/core/risk_engine.py` | Score, multiplier, environment deltas, recommendation text |
 | `app/core/satellite_processor.py` | NDVI and NDWI from deterministic bands |
 | `app/core/evals.py` | Prohibited-term count, factor coverage, Flesch-Kincaid |
+| `app/core/governance.py` | Quote JSON log, audit hook, decision records |
+| `app/core/routing.py` | Model routes: rules, full, explain |
+| `app/core/cost.py` | Per-quote USD ledger and cost hook |
+| `app/core/observability.py` | Local JSONL traces and optional LangSmith export |
+| `app/harness.py` | Fixture evaluation harness for the PRD cases |
 | `app/core/memory.py` | Chroma persist, hash embedder, policy recall |
 | `app/mcp_server/server.py` | JSON-RPC 2.0 tools over stdin/stdout |
 | `app/ui/dashboard.py` | Workbench that posts to the API |
@@ -42,10 +49,14 @@ flowchart TD
 | --- | --- | --- |
 | GET | `/` | Health payload |
 | POST | `/api/v1/reprice` | One telemetry object |
-| POST | `/api/v1/ingest` | JSON list of telemetry objects |
+| POST | `/api/v1/ingest` | JSON list. Returns **202** `{job_id, status: queued}` |
+| GET | `/api/v1/jobs/{job_id}` | Ingest job `queued`, `running`, `done`, or `failed` |
 | GET | `/api/v1/policy/{policy_id}/context` | Optional `limit` query, default 3 |
+| GET | `/api/v1/ops/status` | Environment, version, routes, process cost |
+| GET | `/api/v1/ops/costs` | Cost ledger for this process |
+| GET | `/api/v1/ops/traces` | Recent quote traces |
 
-A quote response includes `risk_score`, `raw_premium`, `final_bounded_premium`, `rate_clamped`, `regulatory_status`, `attribution_reasons`, `recommendations`, `anomalies`, `satellite` (or null), and `evals`. Invalid sensors and prohibited keys return HTTP 422.
+A quote response includes `risk_score`, `raw_premium`, `final_bounded_premium`, `rate_clamped`, `regulatory_status`, `attribution_reasons`, `recommendations`, `anomalies`, `satellite` (or null), `evals`, `decisions`, and `policy_version`. Invalid sensors, prohibited keys, and failed explanation evals return HTTP 422. `/api/v1/*` returns **429** when the per-process token bucket is empty. A full ingest queue returns **503**. When `DMUE_API_KEY` is set, `/api/v1/*` returns **401** without `X-API-Key` or `Authorization: Bearer`.
 
 ## Scoring
 
@@ -84,7 +95,56 @@ Guardrail 3 runs twice. Payload keys in the prohibited set are rejected first. A
 - `flesch_reading_ease` (must be at least 60)
 - `flesch_grade_level` (must be at most 8)
 
-Coverage uses the factor sentences themselves, so a normal quote covers every driver it produced. The syllable count is local. There is no extra readability package.
+Coverage uses the factor sentences themselves, so a normal quote covers every driver it produced. The syllable count is local. There is no extra readability package. A failed eval sets `explanation_eval` to `block`, writes a quote log, and does not store the event.
+
+## Controls
+
+Every quote records a `decisions` list. Each item has `layer`, `name`, and `action`.
+
+| Layer | Check | Allow | Other action |
+| --- | --- | --- | --- |
+| input | `prohibited_keys` | Keys are behavioral | `reject` |
+| input | `anomaly_filter` | Values are physical | `flag` for a hard-brake spike, `reject` for impossible values |
+| output | `explanation_eval` | Leaks 0, coverage at least 0.50, reading ease at least 60, grade at most 8 | `block` |
+| policy | `rate_cap` | Move is inside +25% / −20% | `clamp` |
+
+`policy_version` is `settings.VERSION`. Logger `dmue.quote` writes one JSON line with policy id, `allow` or `block`, score, bounded premium, clamp flag, eval pass, layer actions, and duration in milliseconds.
+
+The HTTP and MCP paths pass `AuditLogHook`. It appends the same event to `AUDIT_LOG_PATH` (default `./data/audit/quotes.jsonl`). Direct `quote_policy` calls used by tests pass no hook. A hook that raises is logged as `block` and skips the memory write.
+
+`python -m app.harness` runs TC-01 through TC-05, the three eval thresholds, and a prohibited-key rejection. Exit code 1 means a case failed.
+
+## Runtime patterns
+
+These stay in the API process. There is no Redis.
+
+| Pattern | Behavior |
+| --- | --- |
+| Rate limit | Token bucket per client IP, `RATE_LIMIT_PER_MINUTE` (default 60). Health `GET /` is not limited. |
+| Queue | `POST /api/v1/ingest` enqueues work. One asyncio worker quotes each event. Cap `INGEST_QUEUE_MAX` (default 100). |
+| Cache | TTL dict (`CACHE_TTL_SECONDS`, default 30). Policy context is keyed by `policy_id` and `limit`. Satellite results are keyed by bbox. Context keys are dropped after a successful quote for that policy. |
+| Circuit breaker | After `CIRCUIT_FAILURES` (default 3) satellite exceptions, skip satellite for `CIRCUIT_COOLDOWN_SECONDS` (default 30). Telematics still score. Decision `satellite_circuit` / `open`. |
+| Horizontal scale | Demo default is one worker (`UVICORN_WORKERS=1`). Chroma writes take a file lock. Do not scale the API until rate limit, cost, traces, and jobs are shared. |
+
+Rate limit, cache, ingest jobs, the cost ledger, and in-memory traces are **per process**. Shared quote history is the Chroma volume on a single node. Do not scale the MCP stdio service.
+
+When `DMUE_API_KEY` is set, `/api/v1/*` (including ops) requires `X-API-Key` or `Authorization: Bearer`. `GET /` is open. Staging and production require a key at process start. `CORS_ALLOW_ORIGINS` is a comma-separated allowlist. Put TLS on a reverse proxy; see [DEPLOY.md](DEPLOY.md).
+
+## Model routing and cost
+
+`model_route` on the quote payload selects a named route. Unknown ids are rejected.
+
+| Route | Signals | Unit USD |
+| --- | --- | --- |
+| `dmue-rules-v1` | Telemetry math only | 0.0002 |
+| `dmue-full-v1` | Environment + satellite (default) | 0.0010 |
+| `dmue-explain-v1` | Same signals, reserved explanation cost | 0.0015 |
+
+Satellite that actually runs adds **0.0005**. `CostHook` appends allow-events to `data/audit/costs.jsonl`. The console sidebar shows process `total_usd`.
+
+## Environment and CI
+
+`DMUE_ENV` is `local`, `staging`, `production`, or `ci`. Copy `env.example` to `.env`. GitHub Actions workflow `.github/workflows/ci.yml` installs dependencies, runs pytest, and runs the harness.
 
 ## Memory
 
@@ -111,10 +171,35 @@ The server reads one JSON-RPC object per stdin line and writes one response per 
 
 | Service | Command | Port |
 | --- | --- | --- |
-| `dmue-api` | `uvicorn app.main:app --host 0.0.0.0 --port 8000` | 8000 |
+| `dmue-api` | `uvicorn ... --workers ${UVICORN_WORKERS:-1}` | 8000 |
 | `dmue-dashboard` | Streamlit on 8501 | 8501 |
 | `dmue-mcp` | `python -m app.mcp_server.server` | stdin/stdout |
 
 The API mounts `./data` at `/app/data` and sets `CHROMA_PERSIST_DIR=/app/data/chroma_db`. The dashboard sets `DMUE_API_URL=http://dmue-api:8000` so the browser app reaches the API service instead of the container's own loopback. Locally the dashboard defaults to `http://127.0.0.1:8000`.
 
-The image is `python:3.11-slim`. Dependencies install in a builder stage and copy into the runtime stage, which also installs `libgomp1` for the numerical stack.
+The image is `python:3.11-slim` and runs as uid `10001` (`dmue`). Dependencies install in a builder stage and copy into the runtime stage, which also installs `libgomp1` for the numerical stack. The API healthcheck calls `GET /`. Production overlay `docker-compose.prod.yml` binds ports to `127.0.0.1` and requires `.env` with `DMUE_API_KEY`. MCP is Compose profile `mcp`. Chroma remains a local directory on a single node.
+sequenceDiagram
+  actor UW as Underwriter
+  participant WB as Workbench
+  participant API as FastAPI
+  participant Q as quote_policy
+  participant DB as Chroma
+
+  UW->>WB: Policy id, prior premium, driving, home, weather, optional box
+  WB->>API: POST /api/v1/reprice
+  Note over WB,API: Night % and moisture % become fractions. No gender, race, ZIP, or credit fields.
+
+  alt Prohibited key or impossible sensor
+    API-->>WB: HTTP 422
+    WB-->>UW: Rejection message. Nothing is stored.
+  else Quote accepted
+    API->>Q: Cleaned telemetry
+    Q->>Q: Score, sentences, language audit, rate clamp
+    Q->>DB: policy_id, risk score, bounded premium, factor text
+    Q-->>API: Premium, score, reasons, actions, anomalies, evals
+    API-->>WB: Quote JSON
+    WB->>API: GET /api/v1/policy/{id}/context
+    API->>DB: Recall by policy_id
+    DB-->>WB: Prior premiums and scores
+    WB-->>UW: Price, score, cap status, factors, actions, trend
+  end

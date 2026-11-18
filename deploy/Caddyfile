@@ -1,0 +1,19 @@
+# Reverse proxy for a single-node DMUE host.
+# Bind Compose ports to 127.0.0.1 only (see docker-compose.prod.yml).
+# Replace dmue.example.com and the certificate paths.
+
+dmue.example.com {
+	encode gzip
+
+	handle /api/* {
+		reverse_proxy 127.0.0.1:8000
+	}
+
+	handle / {
+		reverse_proxy 127.0.0.1:8000
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:8501
+	}
+}

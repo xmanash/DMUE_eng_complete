@@ -19,12 +19,20 @@ class Settings(BaseSettings):
 
     PROJECT_NAME: str = "Dynamic Micro-Underwriting Engine"
     VERSION: str = "1.0.0"
+    DMUE_ENV: str = "local"
+    DEFAULT_MODEL_ROUTE: str = "dmue-full-v1"
 
     MAX_PREMIUM_INCREASE_PCT: float = 0.25
     MAX_PREMIUM_DECREASE_PCT: float = 0.20
     BASE_MONTHLY_AUTO_PREMIUM: float = 120.00
 
     CHROMA_PERSIST_DIR: str = "./data/chroma_db"
+    AUDIT_LOG_PATH: str = "./data/audit/quotes.jsonl"
+    TRACE_LOG_PATH: str = "./data/observability/traces.jsonl"
+
+    LANGSMITH_TRACING: bool = False
+    LANGSMITH_API_KEY: str = ""
+    LANGSMITH_PROJECT: str = "dmue"
 
     # Guardrail 1: hard braking above this rate is a sensor fault, not a risk factor.
     HARD_BRAKE_MALFUNCTION_PER_100MI: float = 20.0
@@ -45,6 +53,16 @@ class Settings(BaseSettings):
 
     # Recognized for deployment config. Index math stays local; see satellite_processor.
     SENTINEL_API_TOKEN: str = ""
+
+    RATE_LIMIT_PER_MINUTE: int = 60
+    INGEST_QUEUE_MAX: int = 100
+    CACHE_TTL_SECONDS: float = 30.0
+    CIRCUIT_FAILURES: int = 3
+    CIRCUIT_COOLDOWN_SECONDS: float = 30.0
+
+    DMUE_API_KEY: str = ""
+    AUTH_REQUIRED: bool = False
+    CORS_ALLOW_ORIGINS: str = ""
 
 
 settings = Settings()

@@ -1,0 +1,13 @@
+{
+  "policy_id": "POL-98234",
+  "hard_brakes_per_100mi": 6,
+  "night_miles_pct": 0.35,
+  "speed_violations": 3,
+  "total_miles": 450,
+  "previous_premium": 120,
+  "iot_moisture": 0.2,
+  "weather_precip_mm": 0,
+  "weather_wind_mph": 0,
+  "bbox": [30.0, 14.0, 31.0, 15.0],
+  "model_route": "dmue-full-v1"
+}

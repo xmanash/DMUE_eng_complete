@@ -2,10 +2,12 @@ import json
 import sys
 from typing import Optional
 
+from app.core.governance import AuditLogHook, configure_logging
 from app.core.memory import PolicyMemoryManager
 from app.core.quote import quote_policy
 
 _memory: Optional[PolicyMemoryManager] = None
+_hooks = [AuditLogHook()]
 
 
 def get_memory() -> PolicyMemoryManager:
@@ -90,7 +92,7 @@ def handle_mcp_request(request_str: str) -> str:
                 return _error(request_id, -32602, "arguments must be an object")
 
             if tool_name == "reprice_policy_micro_underwrite":
-                quoted = quote_policy(args, get_memory())
+                quoted = quote_policy(args, get_memory(), hooks=_hooks)
                 body = dict(quoted)
                 body["calculated_risk_score"] = quoted["risk_score"]
                 body["raw_calculated_premium"] = quoted["raw_premium"]
@@ -123,6 +125,7 @@ def handle_mcp_request(request_str: str) -> str:
 
 
 if __name__ == "__main__":
+    configure_logging()
     for line in sys.stdin:
         if line.strip():
             response = handle_mcp_request(line)
