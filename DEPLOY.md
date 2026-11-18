@@ -8,7 +8,7 @@ Chroma stays a local directory (`CHROMA_PERSIST_DIR`). That is enough for a demo
 
 1. Copy `env.example` to `.env`. Set `DMUE_ENV=production` and a long `DMUE_API_KEY`. Never commit `.env`.
 2. Set the same `DMUE_API_KEY` for the dashboard so the console can call the API.
-3. Leave `LANGSMITH_API_KEY` and `SENTINEL_API_TOKEN` empty unless you intend to use them. Sentinel still does not fetch imagery.
+3. Leave `LANGSMITH_API_KEY` empty unless you export traces. Leave Sentinel credentials empty unless you want live Hub fetches. Set `SENTINEL_LIVE_FETCH=true` with `SENTINEL_CLIENT_ID` and `SENTINEL_CLIENT_SECRET` (or `SENTINEL_API_TOKEN` as the secret) only then. The host must reach `services.sentinel-hub.com`.
 4. Put TLS in front of the process. Do not publish uvicorn or Streamlit on `0.0.0.0`.
 
 ```bash

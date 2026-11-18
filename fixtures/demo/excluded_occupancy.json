@@ -1,0 +1,18 @@
+{
+  "policy_id": "POL-EXCL-01",
+  "previous_premium": 300,
+  "lines": {
+    "auto": {
+      "hard_brakes_per_100mi": 1,
+      "night_miles_pct": 0.05,
+      "speed_violations": 0,
+      "total_miles": 400,
+      "previous_premium": 120
+    },
+    "commercial": {
+      "previous_premium": 300,
+      "tiv": 100000,
+      "occupancy": "excluded"
+    }
+  }
+}

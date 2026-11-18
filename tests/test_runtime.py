@@ -71,7 +71,7 @@ def test_open_circuit_skips_satellite(monkeypatch):
     satellite_cache.clear()
     calls = {"n": 0}
 
-    def boom(self, bbox, crop_type="corn"):
+    def boom(self, bbox, crop_type="corn", live=False):
         calls["n"] += 1
         raise RuntimeError("satellite unavailable")
 

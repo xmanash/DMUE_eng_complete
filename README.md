@@ -64,7 +64,7 @@ The console is a dark operations layout. The sidebar is the control plane: API t
 | Refresh trend | Blue | Reloads quote history for the policy id |
 | Reset inputs | Slate | Restores the sample policy `POL-98234` |
 
-The Quote tab shows premium, risk, filing cap, per-quote cost, factors, and the premium/risk trend. The Operations tab lists routes, unit costs, traces, and the in-process cost ledger from `GET /api/v1/ops/status`. The Controls tab runs ingest and a prohibited-key rejection. Cost and traces are **this API process only** — run one uvicorn worker in a demo.
+The Quote tab shows premium, risk, filing cap, per-quote cost, factors, and the premium/risk trend. Check **Include home line** or **Include commercial line** to price an account; the account premium is the sum of bounded line premiums. The **Desk** tab holds the appetite recommendation (accept/refer/decline), human decision with override, referrals, and the packet download. The **Intake** tab creates ACORD-like submissions — missing documents block bind, not quoting. The Operations tab lists routes, unit costs, traces, and the in-process cost ledger. The Controls tab runs ingest and a prohibited-key rejection. Cost and traces are **this API process only** — run one uvicorn worker in a demo.
 
 MCP, if you want to drive the tools from stdin:
 
@@ -113,7 +113,7 @@ The API and MCP server log one JSON line per quote on logger `dmue.quote` and ap
 
 `POST /api/v1/reprice` accepts one object and prices it in the request. `POST /api/v1/ingest` accepts a JSON list and returns **202** `{job_id, status: queued}`. Poll `GET /api/v1/jobs/{job_id}` for `done` or `failed`. A full queue returns **503**. `/api/v1/*` returns **429** when the token bucket is empty (`RATE_LIMIT_PER_MINUTE`, default 60). Health `GET /` is not limited.
 
-Required fields are `policy_id` and `previous_premium`. Optional fields are telematics, `iot_moisture`, `weather_precip_mm`, `weather_wind_mph`, `bbox`, and `model_route` (`dmue-rules-v1`, `dmue-full-v1`, `dmue-explain-v1`). `GET /api/v1/ops/status`, `GET /api/v1/ops/costs`, and `GET /api/v1/ops/traces` report environment, routes, process cost, and recent traces. When `DMUE_API_KEY` is set, every `/api/v1/*` path (including ops) needs `X-API-Key` or `Authorization: Bearer`. Staging and production refuse to start without a key. `GET /` stays open for health checks. `/api/v1/*` is rate limited.
+Required fields are `policy_id` and `previous_premium`. Optional fields are telematics, `iot_moisture`, `weather_precip_mm`, `weather_wind_mph`, `bbox`, `model_route` (`dmue-rules-v1`, `dmue-full-v1`, `dmue-explain-v1`), and `lines` (`auto`/`home`/`commercial` on one policy). Every quote carries `uw_recommendation`. `POST /api/v1/uw/decision`, `GET /api/v1/uw/referrals`, `GET /api/v1/uw/packet/{policy_id}`, and `POST`/`GET /api/v1/submissions` run the desk and intake. Thresholds are `UW_REFER_SCORE` (80) and `UW_DECLINE_SCORE` (95). `GET /api/v1/ops/status`, `GET /api/v1/ops/costs`, and `GET /api/v1/ops/traces` report environment, routes, process cost, and recent traces. When `DMUE_API_KEY` is set, every `/api/v1/*` path (including ops) needs `X-API-Key` or `Authorization: Bearer`. Staging and production refuse to start without a key. `GET /` stays open for health checks. `/api/v1/*` is rate limited.
 
 A hard-brake rate above 20 per 100 miles is recorded as a sensor fault and is not scored. Keys such as `gender`, `race`, `zip_code`, and `credit_score` are rejected.
 
@@ -151,6 +151,9 @@ GitHub Actions (`.github/workflows/ci.yml`) sets `DMUE_ENV=ci` and runs `pytest`
 | `DMUE_API_KEY` | empty | Bearer / `X-API-Key` for `/api/v1/*`. Required in staging and production |
 | `AUTH_REQUIRED` | `false` | Force API-key checks even in `local` |
 | `CORS_ALLOW_ORIGINS` | empty | Comma-separated browser origins |
-| `SENTINEL_API_TOKEN` | empty | Recorded on the satellite result. Indices still come from local bands. |
+| `SENTINEL_LIVE_FETCH` | `false` | Allow live Sentinel Hub when credentials are set |
+| `SENTINEL_CLIENT_ID` | empty | Sentinel Hub OAuth client id |
+| `SENTINEL_CLIENT_SECRET` | empty | Sentinel Hub OAuth client secret |
+| `SENTINEL_API_TOKEN` | empty | Alias for the client secret when `SENTINEL_CLIENT_ID` is set |
 
-Vegetation indices do not call the network. The drought fixture box is `(30.0, 14.0, 31.0, 15.0)`.
+Vegetation indices default to local bands. Live Sentinel-2 statistics run only when live is requested and credentials are present. A Hub failure falls back to local NDVI/NDWI. The drought fixture box is `(30.0, 14.0, 31.0, 15.0)`.

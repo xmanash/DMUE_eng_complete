@@ -22,10 +22,13 @@ from app.core.cost import CostHook, cost_tracker
 from app.core.governance import AuditLogHook, configure_logging
 from app.core.observability import observability_status, trace_store
 from app.core.routing import catalog
+from app.core.satellite_processor import sentinel_status
 from app.core.jobs import JobManager, JobQueueFull
 from app.core.memory import PolicyMemoryManager
 from app.core.quote import quote_policy
 from app.core.ratelimit import limiter
+from app.core.submissions import missing_documents, submission_store
+from app.core.underwriting import uw_store
 
 configure_logging()
 
@@ -41,7 +44,12 @@ def get_memory() -> PolicyMemoryManager:
 
 
 def _run_quote(payload: Dict[str, Any]) -> Dict[str, Any]:
-    return quote_policy(payload, get_memory(), hooks=_hooks)
+    result = quote_policy(payload, get_memory(), hooks=_hooks)
+    try:
+        uw_store.record_quote(result)
+    except Exception:
+        pass
+    return result
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -131,12 +139,14 @@ class TelemetryIngestPayload(BaseModel):
     night_miles_pct: float = 0
     speed_violations: int = 0
     total_miles: float = 0
-    previous_premium: float
+    previous_premium: Optional[float] = None
     iot_moisture: Optional[float] = None
     weather_precip_mm: Optional[float] = None
     weather_wind_mph: Optional[float] = None
     bbox: Optional[List[float]] = None
     model_route: Optional[str] = None
+    sentinel_live: Optional[bool] = None
+    lines: Optional[Dict[str, Any]] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -189,6 +199,7 @@ def ops_status():
         "cost": cost_tracker.summary(),
         "observability": observability_status(),
         "traces": trace_store.list_recent(10),
+        "sentinel": sentinel_status(),
     }
 
 
@@ -227,6 +238,129 @@ def job_status(job_id: str, request: Request):
     if job is None:
         raise HTTPException(status_code=404, detail="Unknown job_id")
     return job
+
+
+class UWDecisionPayload(BaseModel):
+    policy_id: str
+    quote_trace_id: str = ""
+    action: str
+    underwriter: str = ""
+    note: str = ""
+    submission_id: str = ""
+
+
+class UWNotePayload(BaseModel):
+    policy_id: str
+    quote_trace_id: str = ""
+    underwriter: str = ""
+    note: str
+
+
+@app.post("/api/v1/uw/decision")
+def uw_decision(payload: UWDecisionPayload):
+    action = payload.action.strip().lower()
+    if action not in {"accept", "refer", "decline"}:
+        raise HTTPException(status_code=422, detail="action must be accept, refer, or decline")
+    submission = None
+    if payload.submission_id:
+        submission = submission_store.get(payload.submission_id)
+        if submission is None:
+            raise HTTPException(status_code=404, detail="Unknown submission_id")
+        if action == "accept":
+            missing = missing_documents(submission)
+            if missing:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"documents_incomplete: {', '.join(missing)}",
+                )
+    latest = uw_store.latest_quote(payload.policy_id)
+    recommendation = ""
+    if latest and (
+        not payload.quote_trace_id
+        or latest.get("quote_trace_id") == payload.quote_trace_id
+    ):
+        recommendation = str(latest.get("uw_recommendation") or "")
+    try:
+        entry = uw_store.record_decision(
+            policy_id=payload.policy_id,
+            quote_trace_id=payload.quote_trace_id,
+            action=action,
+            underwriter=payload.underwriter,
+            note=payload.note,
+            recommendation=recommendation,
+            submission_id=payload.submission_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if submission is not None:
+        status = {"accept": "bound", "refer": "referred", "decline": "declined"}[action]
+        submission_store.update_status(payload.submission_id, status)
+    return entry
+
+
+@app.post("/api/v1/uw/notes")
+def uw_note(payload: UWNotePayload):
+    try:
+        return uw_store.record_note(
+            policy_id=payload.policy_id,
+            quote_trace_id=payload.quote_trace_id,
+            underwriter=payload.underwriter,
+            note=payload.note,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/uw/referrals")
+def uw_referrals():
+    return {"referrals": uw_store.referrals()}
+
+
+@app.get("/api/v1/uw/packet/{policy_id}")
+def uw_packet(policy_id: str):
+    return uw_store.packet(policy_id)
+
+
+@app.post("/api/v1/submissions")
+def create_submission(payload: Dict[str, Any]):
+    try:
+        return submission_store.create(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/submissions/{submission_id}")
+def get_submission(submission_id: str):
+    submission = submission_store.get(submission_id)
+    if submission is None:
+        raise HTTPException(status_code=404, detail="Unknown submission_id")
+    return submission
+
+
+@app.post("/api/v1/submissions/{submission_id}/quote")
+def quote_submission(submission_id: str):
+    submission = submission_store.get(submission_id)
+    if submission is None:
+        raise HTTPException(status_code=404, detail="Unknown submission_id")
+    lines = submission.get("lines")
+    if isinstance(lines, dict) and lines:
+        payload: Dict[str, Any] = {
+            "policy_id": submission["policy_id"],
+            "lines": lines,
+        }
+    elif isinstance(lines, dict):
+        payload = {"policy_id": submission["policy_id"], **lines}
+    else:
+        raise HTTPException(status_code=422, detail="Submission has no lines to quote")
+    if submission.get("model_route"):
+        payload["model_route"] = submission["model_route"]
+    result = _quote_or_http(payload)
+    recommendation = result.get("uw_recommendation")
+    status = {"refer": "referred", "decline": "declined"}.get(
+        recommendation, "quoted"
+    )
+    updated = submission_store.update_status(submission_id, status)
+    return {"submission": updated, "quote": result}
 
 
 @app.get("/api/v1/policy/{policy_id}/context")

@@ -32,12 +32,16 @@ flowchart TD
 | `app/core/config.py` | Caps, physical bounds, signal weights, eval thresholds |
 | `app/core/guardrails.py` | Anomaly filter, +25% / −20% clamp, prohibited-factor rejection |
 | `app/core/risk_engine.py` | Score, multiplier, environment deltas, recommendation text |
-| `app/core/satellite_processor.py` | NDVI and NDWI from deterministic bands |
+| `app/core/satellite_processor.py` | NDVI and NDWI from local bands, optional live Sentinel Hub |
 | `app/core/evals.py` | Prohibited-term count, factor coverage, Flesch-Kincaid |
 | `app/core/governance.py` | Quote JSON log, audit hook, decision records |
 | `app/core/routing.py` | Model routes: rules, full, explain |
 | `app/core/cost.py` | Per-quote USD ledger and cost hook |
 | `app/core/observability.py` | Local JSONL traces and optional LangSmith export |
+| `app/core/appetite.py` | Accept/refer/decline from score, clamp, NDVI, anomaly |
+| `app/core/underwriting.py` | UW JSONL: quote snapshots, decisions, notes, referrals, packet |
+| `app/core/lines.py` | Home and commercial line pricing (deterministic loads) |
+| `app/core/submissions.py` | ACORD-like submission JSONL and document checklist |
 | `app/harness.py` | Fixture evaluation harness for the PRD cases |
 | `app/core/memory.py` | Chroma persist, hash embedder, policy recall |
 | `app/mcp_server/server.py` | JSON-RPC 2.0 tools over stdin/stdout |
@@ -55,8 +59,15 @@ flowchart TD
 | GET | `/api/v1/ops/status` | Environment, version, routes, process cost |
 | GET | `/api/v1/ops/costs` | Cost ledger for this process |
 | GET | `/api/v1/ops/traces` | Recent quote traces |
+| POST | `/api/v1/uw/decision` | Human accept/refer/decline. Accept on refer/decline sets `override` |
+| POST | `/api/v1/uw/notes` | Append a UW note |
+| GET | `/api/v1/uw/referrals` | Open referrals (appetite or human) |
+| GET | `/api/v1/uw/packet/{policy_id}` | Latest quote, status, decisions, notes |
+| POST | `/api/v1/submissions` | Create an ACORD-like submission |
+| GET | `/api/v1/submissions/{id}` | Submission and checklist |
+| POST | `/api/v1/submissions/{id}/quote` | Price the stored lines |
 
-A quote response includes `risk_score`, `raw_premium`, `final_bounded_premium`, `rate_clamped`, `regulatory_status`, `attribution_reasons`, `recommendations`, `anomalies`, `satellite` (or null), `evals`, `decisions`, and `policy_version`. Invalid sensors, prohibited keys, and failed explanation evals return HTTP 422. `/api/v1/*` returns **429** when the per-process token bucket is empty. A full ingest queue returns **503**. When `DMUE_API_KEY` is set, `/api/v1/*` returns **401** without `X-API-Key` or `Authorization: Bearer`.
+A quote response includes `risk_score`, `raw_premium`, `final_bounded_premium`, `rate_clamped`, `regulatory_status`, `attribution_reasons`, `recommendations`, `anomalies`, `satellite` (or null), `evals`, `decisions`, `uw_recommendation`, `uw_reasons`, `uw_status`, and `policy_version`. Appetite declines at score 95+, refers at 80+, on clamp, low NDVI, or sensor fault; it never changes the premium. With `lines`, the response also has per-line pricing plus `account_premium` (sum of bounded lines) and `account_risk` (max line score). A submission with missing required documents (`acord_125`, `loss_runs`, `sov`) can be quoted but cannot be accepted (`documents_incomplete`). Invalid sensors, prohibited keys, and failed explanation evals return HTTP 422. `/api/v1/*` returns **429** when the per-process token bucket is empty. A full ingest queue returns **503**. When `DMUE_API_KEY` is set, `/api/v1/*` returns **401** without `X-API-Key` or `Authorization: Bearer`.
 
 ## Scoring
 
@@ -78,7 +89,7 @@ The clamp then limits the move versus `previous_premium` to +25% and −20%.
 
 `compute_ndvi` and `compute_ndwi` are the usual normalized differences. `synthesize_bands` maps the box center onto reflectance. Distance is measured from longitude 30.5, latitude 14.5, and reaches a healthy canopy by 8 degrees. The distressed fixture `(30.0, 14.0, 31.0, 15.0)` is the TC-03 box.
 
-`SENTINEL_API_TOKEN` is stored on the result as `sentinel_token_configured`. `sentinel_live_fetch` stays false. The engine does not call Sentinel Hub.
+Local bands stay the default (`satellite_source: deterministic_bbox_bands`, `sentinel_live_fetch: false`). Live Sentinel Hub is opt-in: `SENTINEL_LIVE_FETCH` or quote field `sentinel_live`, plus `SENTINEL_CLIENT_ID` and `SENTINEL_CLIENT_SECRET` (`SENTINEL_API_TOKEN` can stand in for the secret). The processor then OAuth-caches a token and POSTs `/api/v1/statistics` for Sentinel-2 L2A NDVI/NDWI. Failure returns local indices with `satellite_source: local_fallback` and a short `sentinel_live_error`. `/api/v1/ops/status` reports `sentinel.live_enabled` and `sentinel.credentials_configured` only.
 
 ## Guardrails
 
@@ -122,8 +133,8 @@ These stay in the API process. There is no Redis.
 | --- | --- |
 | Rate limit | Token bucket per client IP, `RATE_LIMIT_PER_MINUTE` (default 60). Health `GET /` is not limited. |
 | Queue | `POST /api/v1/ingest` enqueues work. One asyncio worker quotes each event. Cap `INGEST_QUEUE_MAX` (default 100). |
-| Cache | TTL dict (`CACHE_TTL_SECONDS`, default 30). Policy context is keyed by `policy_id` and `limit`. Satellite results are keyed by bbox. Context keys are dropped after a successful quote for that policy. |
-| Circuit breaker | After `CIRCUIT_FAILURES` (default 3) satellite exceptions, skip satellite for `CIRCUIT_COOLDOWN_SECONDS` (default 30). Telematics still score. Decision `satellite_circuit` / `open`. |
+| Cache | TTL dict (`CACHE_TTL_SECONDS`, default 30). Policy context is keyed by `policy_id` and `limit`. Satellite results are keyed by bbox and live/local. Context keys are dropped after a successful quote for that policy. |
+| Circuit breaker | After `CIRCUIT_FAILURES` (default 3) satellite exceptions, skip the processor for `CIRCUIT_COOLDOWN_SECONDS` (default 30) unless live was requested, in which case Hub is skipped and local bands still run. Telematics still score. Decision `satellite_circuit` / `open`. |
 | Horizontal scale | Demo default is one worker (`UVICORN_WORKERS=1`). Chroma writes take a file lock. Do not scale the API until rate limit, cost, traces, and jobs are shared. |
 
 Rate limit, cache, ingest jobs, the cost ledger, and in-memory traces are **per process**. Shared quote history is the Chroma volume on a single node. Do not scale the MCP stdio service.

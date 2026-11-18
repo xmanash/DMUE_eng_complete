@@ -72,7 +72,10 @@ DMUE prices from behavior instead. It accepts telematics, home moisture, weather
 | FR-03 | Regulatory guardrails | Keep the premium inside the prior premium's +25% / −20% band. | P0 | `ActuarialGuardrailEnforcer.enforce_rate_caps` |
 | FR-04 | Vector episodic memory | Store each quote and recall it by `policy_id`. | P1 | `app/core/memory.py` |
 | FR-05 | Agentic MCP interface | Expose repricing and recall as MCP tools over JSON-RPC 2.0. | P1 | `app/mcp_server/server.py` |
-| FR-06 | Satellite processor | Compute NDVI and NDWI and add vegetation stress to the score. | P1 | `app/core/satellite_processor.py` |
+| FR-06 | Satellite processor | Compute NDVI and NDWI and add vegetation stress to the score. Local bands by default; optional live Sentinel Hub with local fallback. | P1 | `app/core/satellite_processor.py` |
+| FR-07 | UW decision desk | Appetite accept/refer/decline, human decision with override, notes, referrals, packet. Appetite does not change the premium. | P1 | `app/core/appetite.py`, `app/core/underwriting.py`, Desk tab |
+| FR-08 | Multi-line account | Optional `lines.auto/home/commercial` on one policy. Account premium is the sum of bounded line premiums. Excluded occupancy declines. Not a filed multi-line product. | P1 | `app/core/lines.py`, `quote_policy` lines branch |
+| FR-09 | Submission intake | ACORD-like JSON with broker/AOR, documents, and losses. Missing documents block bind, not quoting. Not ACORD XML. | P1 | `app/core/submissions.py`, Intake tab |
 
 Ingestion is an HTTP request. `POST /api/v1/reprice` takes one event and prices it in the request. `POST /api/v1/ingest` takes a JSON list, returns **202**, and prices events on an in-process asyncio queue. Poll `GET /api/v1/jobs/{job_id}`. There is no Redis. A full queue returns **503**. `/api/v1/*` returns **429** when the process token bucket is empty.
 
@@ -165,7 +168,7 @@ Band values are a deterministic function of the bounding-box center. The drought
 | below 0.45 | +10 | Plant health is moderate |
 | 0.45 or higher | −15 | Plant health is strong |
 
-`SENTINEL_API_TOKEN` is read from the environment when a deployment has one. This build still uses the local bands and sets `sentinel_live_fetch` to false. Pricing does not depend on a network call.
+`SENTINEL_LIVE_FETCH` plus OAuth client credentials enable a live Sentinel Hub statistics call. The quote field `sentinel_live` can turn that on or off per request. A Hub failure does not fail the quote: indices fall back to local bands (`local_fallback`). Without credentials or the flag, `sentinel_live_fetch` stays false.
 
 ## 7. Memory
 

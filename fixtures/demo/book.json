@@ -1,0 +1,7 @@
+[
+  {"id": "POL-ACCEPT-01", "tone": "accept", "file": "good_driver.json"},
+  {"id": "POL-REFER-01", "tone": "refer", "file": "night_speed_spike.json"},
+  {"id": "POL-DECLINE-01", "tone": "decline", "note": "stacked telematics"},
+  {"id": "POL-FAULT-01", "tone": "fault", "note": "hard brakes 25"},
+  {"id": "POL-EXCL-01", "tone": "decline", "note": "excluded occupancy"}
+]

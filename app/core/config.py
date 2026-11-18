@@ -51,8 +51,15 @@ class Settings(BaseSettings):
     FLESCH_READING_EASE_MIN: float = 60.0
     FLESCH_GRADE_MAX: float = 8.0
 
-    # Recognized for deployment config. Index math stays local; see satellite_processor.
+    # Sentinel Hub is opt-in. Local bbox bands stay the default.
+    SENTINEL_LIVE_FETCH: bool = False
+    SENTINEL_CLIENT_ID: str = ""
+    SENTINEL_CLIENT_SECRET: str = ""
     SENTINEL_API_TOKEN: str = ""
+    SENTINEL_OAUTH_URL: str = (
+        "https://services.sentinel-hub.com/auth/realms/main/protocol/openid-connect/token"
+    )
+    SENTINEL_API_BASE: str = "https://services.sentinel-hub.com/api/v1"
 
     RATE_LIMIT_PER_MINUTE: int = 60
     INGEST_QUEUE_MAX: int = 100
@@ -63,6 +70,11 @@ class Settings(BaseSettings):
     DMUE_API_KEY: str = ""
     AUTH_REQUIRED: bool = False
     CORS_ALLOW_ORIGINS: str = ""
+
+    UW_REFER_SCORE: float = 80.0
+    UW_DECLINE_SCORE: float = 95.0
+    UW_LOG_PATH: str = "./data/uw/actions.jsonl"
+    SUBMISSIONS_LOG_PATH: str = "./data/uw/submissions.jsonl"
 
 
 settings = Settings()

@@ -20,6 +20,8 @@ def test_ops_status_reports_environment_and_routes():
     assert {"dmue-rules-v1", "dmue-full-v1", "dmue-explain-v1"} <= ids
     assert body["observability"]["local"] is True
     assert body["observability"]["langsmith"] is False
+    assert isinstance(body["sentinel"]["live_enabled"], bool)
+    assert isinstance(body["sentinel"]["credentials_configured"], bool)
 
 
 def test_rules_route_skips_satellite():

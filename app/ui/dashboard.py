@@ -1,11 +1,26 @@
 import os
+import sys
 import time
+from pathlib import Path
 from urllib.parse import quote
 
 import altair as alt
 import pandas as pd
 import requests
 import streamlit as st
+
+_ROOT = Path(__file__).resolve().parents[2]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
+from app.ui.demo_cases import (
+    CASES,
+    CASES_BY_ID,
+    TONE_COLORS,
+    banner_html,
+    payload_from_fields,
+    tone_for_quote,
+)
 
 API_URL = os.getenv("DMUE_API_URL", "http://127.0.0.1:8000").rstrip("/")
 LOCAL_ENV = os.getenv("DMUE_ENV", "local")
@@ -27,6 +42,23 @@ DEFAULTS = {
     "max_lon": 31.0,
     "max_lat": 15.0,
     "model_route": "dmue-full-v1",
+    "sentinel_live": False,
+    "include_home": False,
+    "home_prev_premium": 150.0,
+    "home_moisture_pct": 20,
+    "include_commercial": False,
+    "commercial_prev_premium": 300.0,
+    "commercial_tiv": 500000.0,
+    "commercial_occupancy": "office",
+    "uw_underwriter": "",
+    "uw_note": "",
+    "broker_name": "",
+    "broker_agency": "",
+    "broker_aor": False,
+    "effective_date": "2026-01-01",
+    "doc_acord_125": True,
+    "doc_loss_runs": False,
+    "doc_sov": False,
 }
 
 st.set_page_config(
@@ -93,6 +125,30 @@ st.markdown(
         background: #334155 !important; color: #fff !important;
         border: 1px solid #64748B !important; border-radius: 8px !important; font-weight: 600 !important;
     }
+    .st-key-load_case button, .st-key-price_book button {
+        background: #FACC15 !important; color: #1C1917 !important;
+        border: 1px solid #CA8A04 !important; border-radius: 8px !important; font-weight: 700 !important;
+    }
+    .st-key-uw_accept button {
+        background: #16A34A !important; color: #052E16 !important;
+        border: 1px solid #4ADE80 !important; border-radius: 8px !important; font-weight: 700 !important;
+    }
+    .st-key-uw_refer button {
+        background: #EAB308 !important; color: #1C1917 !important;
+        border: 1px solid #FDE047 !important; border-radius: 8px !important; font-weight: 700 !important;
+    }
+    .st-key-uw_decline button {
+        background: #DC2626 !important; color: #FEF2F2 !important;
+        border: 1px solid #F87171 !important; border-radius: 8px !important; font-weight: 700 !important;
+    }
+    .chip.accept { background: #16A34A; color: #052E16; }
+    .chip.refer { background: #EAB308; color: #1C1917; }
+    .chip.decline { background: #DC2626; color: #FEF2F2; }
+    .chip.clamp { background: #EA580C; color: #FFF7ED; }
+    .chip.fault { background: #7C3AED; color: #F5F3FF; }
+    .chip.live { background: #0D9488; color: #ECFDF5; }
+    .chip.local { background: #475569; color: #F8FAFC; }
+    .chip.fallback { background: #D97706; color: #FFFBEB; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -121,6 +177,11 @@ def format_api_detail(detail) -> str:
     else:
         text = str(detail)
     lower = text.lower()
+    if "documents_incomplete" in lower:
+        return (
+            "This submission cannot bind yet: required documents are missing "
+            "(ACORD 125, loss runs, or SOV). Quoting is still allowed."
+        )
     if "prohibited factor" in lower:
         return (
             "This quote was rejected because it includes a prohibited rating factor "
@@ -152,6 +213,17 @@ for key, value in DEFAULTS.items():
     if key not in st.session_state:
         st.session_state[key] = value
 
+if st.session_state.get("pending_case"):
+    case = CASES_BY_ID.get(st.session_state.pop("pending_case"))
+    if case:
+        for key, value in case["fields"].items():
+            st.session_state[key] = value
+        st.session_state.last_quote = None
+        st.session_state.quote_error = ""
+        st.session_state.history_loaded_for = None
+        st.session_state.desk_message = ""
+        st.session_state.active_tone = case["tone"]
+
 
 def fetch_ops():
     try:
@@ -170,6 +242,57 @@ def fetch_ops():
             "traces": [],
             "observability": {},
         }
+
+
+def build_quote_payload():
+    auto = {
+        "policy_id": st.session_state.policy_id,
+        "hard_brakes_per_100mi": st.session_state.hard_brakes,
+        "night_miles_pct": st.session_state.night_pct_ui / 100.0,
+        "speed_violations": int(st.session_state.speed_violations),
+        "total_miles": st.session_state.total_miles,
+        "previous_premium": st.session_state.prev_premium,
+        "iot_moisture": st.session_state.moisture_pct / 100.0,
+        "weather_precip_mm": st.session_state.precip_mm,
+        "weather_wind_mph": st.session_state.wind_mph,
+        "model_route": st.session_state.model_route,
+        "sentinel_live": bool(st.session_state.get("sentinel_live")),
+    }
+    bbox = None
+    if st.session_state.use_bbox:
+        bbox = [
+            st.session_state.min_lon,
+            st.session_state.min_lat,
+            st.session_state.max_lon,
+            st.session_state.max_lat,
+        ]
+        auto["bbox"] = bbox
+    if not st.session_state.include_home and not st.session_state.include_commercial:
+        return auto
+    lines = {"auto": {k: v for k, v in auto.items() if k != "policy_id"}}
+    if st.session_state.include_home:
+        home = {
+            "previous_premium": st.session_state.home_prev_premium,
+            "iot_moisture": st.session_state.home_moisture_pct / 100.0,
+            "weather_precip_mm": st.session_state.precip_mm,
+            "weather_wind_mph": st.session_state.wind_mph,
+        }
+        if bbox:
+            home["bbox"] = bbox
+        lines["home"] = home
+    if st.session_state.include_commercial:
+        lines["commercial"] = {
+            "previous_premium": st.session_state.commercial_prev_premium,
+            "tiv": st.session_state.commercial_tiv,
+            "occupancy": st.session_state.commercial_occupancy,
+        }
+    return {
+        "policy_id": st.session_state.policy_id,
+        "previous_premium": st.session_state.prev_premium,
+        "model_route": st.session_state.model_route,
+        "sentinel_live": bool(st.session_state.get("sentinel_live")),
+        "lines": lines,
+    }
 
 
 def fetch_history(policy_id: str):
@@ -311,21 +434,126 @@ with st.sidebar:
     cost = ops.get("cost") or {}
     st.metric("Process quote cost", f"${float(cost.get('total_usd') or 0):.4f}")
     st.caption(f"{cost.get('quotes', 0)} quotes on this API process")
+    sentinel_ops = ops.get("sentinel") or {}
+    creds_ok = bool(sentinel_ops.get("credentials_configured"))
+    st.checkbox(
+        "Live Sentinel Hub",
+        key="sentinel_live",
+        disabled=not creds_ok,
+        help="Opt-in Sentinel-2 NDVI/NDWI. Falls back to local bands on failure.",
+    )
+    if not creds_ok:
+        st.caption(
+            "Live fetch needs SENTINEL_CLIENT_ID and SENTINEL_CLIENT_SECRET "
+            "(SENTINEL_API_TOKEN can stand in for the secret)."
+        )
+    elif sentinel_ops.get("live_enabled"):
+        st.caption("SENTINEL_LIVE_FETCH is on for this API process. Uncheck to force local bands.")
+    st.markdown("**Demo book**")
+    st.caption("Synthetic cases. Colors: green accept, yellow refer, red decline, orange clamp, purple sensor.")
+    case_ids = [item["id"] for item in CASES]
+    st.selectbox(
+        "Synthetic case",
+        options=case_ids,
+        format_func=lambda item: CASES_BY_ID[item]["label"],
+        key="demo_pick",
+    )
+    picked = CASES_BY_ID.get(st.session_state.demo_pick)
+    if picked:
+        st.caption(picked["blurb"])
+    load_col, book_col = st.columns(2)
+    with load_col:
+        if st.button("Load case", key="load_case", type="primary", width="stretch"):
+            st.session_state.pending_case = st.session_state.demo_pick
+            st.rerun()
+    with book_col:
+        if st.button("Price all", key="price_book", type="primary", width="stretch"):
+            book = []
+            for item in CASES:
+                try:
+                    posted = requests.post(
+                        f"{API_URL}/api/v1/reprice",
+                        json=payload_from_fields(item["fields"]),
+                        headers=api_headers(),
+                        timeout=20,
+                    )
+                    if posted.status_code == 200:
+                        body = posted.json()
+                        book.append(
+                            {
+                                "policy_id": body.get("policy_id"),
+                                "tone": tone_for_quote(body),
+                                "uw": body.get("uw_recommendation"),
+                                "score": body.get("risk_score"),
+                                "premium": body.get("final_bounded_premium"),
+                            }
+                        )
+                    else:
+                        book.append(
+                            {
+                                "policy_id": item["id"],
+                                "tone": item["tone"],
+                                "uw": "error",
+                                "score": None,
+                                "premium": None,
+                            }
+                        )
+                except Exception:
+                    book.append(
+                        {
+                            "policy_id": item["id"],
+                            "tone": "fault",
+                            "uw": "offline",
+                            "score": None,
+                            "premium": None,
+                        }
+                    )
+            st.session_state.demo_book = book
+            st.session_state.book_message = f"Priced {len(book)} synthetic policies."
 
 chip_class = (
     env_name if env_name in {"local", "staging", "prod", "production", "ci", "demo"} else "local"
 )
+quote_tone = tone_for_quote(st.session_state.get("last_quote") or {})
+if st.session_state.get("last_quote"):
+    rec_chip = f'<span class="chip {quote_tone}">{quote_tone.upper()}</span>'
+else:
+    rec_chip = ""
 st.markdown(
     f"""
     <div class="hero">
       <span class="chip {chip_class}">{env_name.upper()}</span>
       <span class="chip">{st.session_state.model_route}</span>
+      {rec_chip}
       <h1>DMUE underwriting console</h1>
-      <p>Behavioral pricing inside a +25% / −20% filing band. Satellite indices are simulated local bands, not a live Sentinel Hub fetch. This console is an underwriting core, not a production bind.</p>
+      <p>Behavioral pricing inside a +25% / −20% filing band. Satellite indices default to local bands. Live Sentinel Hub is opt-in in the sidebar when credentials are set. This console is an underwriting core, not a production bind.</p>
+      <p class="legend">
+        <span class="chip accept">ACCEPT</span>
+        <span class="chip refer">REFER</span>
+        <span class="chip decline">DECLINE</span>
+        <span class="chip clamp">CLAMP</span>
+        <span class="chip fault">SENSOR</span>
+      </p>
     </div>
     """,
     unsafe_allow_html=True,
 )
+if st.session_state.get("demo_book"):
+    book_frame = pd.DataFrame(st.session_state.demo_book)
+
+    def _style_tone(val):
+        colors = TONE_COLORS.get(str(val), {})
+        if not colors:
+            return ""
+        return f"background-color: {colors['bg']}; color: {colors['fg']}; font-weight: 700;"
+
+    try:
+        styled = book_frame.style.map(_style_tone, subset=["tone", "uw"])
+    except Exception:
+        styled = book_frame
+    st.dataframe(styled, width="stretch", hide_index=True)
+    if st.session_state.get("book_message"):
+        st.caption(st.session_state.book_message)
 if ops.get("version") == "offline":
     st.error(
         f"The API at {API_URL} is not reachable. Start uvicorn (or docker compose) before using the console."
@@ -334,7 +562,9 @@ if ops.get("version") == "offline":
 if st.session_state.get("history_loaded_for") != st.session_state.policy_id:
     load_history(st.session_state.policy_id)
 
-quote_tab, controls_tab, ops_tab = st.tabs(["Quote", "Controls", "Operations"])
+quote_tab, desk_tab, intake_tab, controls_tab, ops_tab = st.tabs(
+    ["Quote", "Desk", "Intake", "Controls", "Operations"]
+)
 
 with quote_tab:
     left, right = st.columns([1, 1], gap="large")
@@ -366,6 +596,22 @@ with quote_tab:
                 max_lat = st.number_input("Max latitude", key="max_lat")
             bbox = [min_lon, min_lat, max_lon, max_lat]
 
+        st.checkbox("Include home line", key="include_home")
+        if st.session_state.include_home:
+            st.number_input("Home prior premium ($)", min_value=0.01, step=1.0, key="home_prev_premium")
+            st.slider("Home moisture for home line (%)", 0, 100, key="home_moisture_pct")
+        st.checkbox("Include commercial line", key="include_commercial")
+        if st.session_state.include_commercial:
+            st.number_input(
+                "Commercial prior premium ($)", min_value=0.01, step=1.0, key="commercial_prev_premium"
+            )
+            st.number_input("Commercial TIV ($)", min_value=0.0, step=10000.0, key="commercial_tiv")
+            st.selectbox(
+                "Commercial occupancy",
+                options=["office", "retail", "warehouse", "excluded"],
+                key="commercial_occupancy",
+            )
+
         reprice_col, refresh_col, reset_col = st.columns(3)
         with reprice_col:
             do_reprice = st.button("Re-underwrite", key="reprice", type="primary", width="stretch")
@@ -378,19 +624,7 @@ with quote_tab:
         load_history(policy_id)
 
     if do_reprice:
-        payload = {
-            "policy_id": policy_id,
-            "hard_brakes_per_100mi": hard_brakes,
-            "night_miles_pct": night_pct_ui / 100.0,
-            "speed_violations": int(speed_violations),
-            "total_miles": total_miles,
-            "previous_premium": prev_premium,
-            "iot_moisture": moisture_pct / 100.0,
-            "weather_precip_mm": precip_mm,
-            "weather_wind_mph": wind_mph,
-            "bbox": bbox,
-            "model_route": st.session_state.model_route,
-        }
+        payload = build_quote_payload()
         try:
             response = requests.post(
                 f"{API_URL}/api/v1/reprice",
@@ -439,6 +673,14 @@ with quote_tab:
                 f"Route {data.get('model_route_label', data.get('model_route', ''))} · "
                 f"env {data.get('environment', env_name)}"
             )
+            st.markdown(
+                banner_html(
+                    f"{data.get('policy_id')} · {str(data.get('uw_recommendation', '')).upper()}",
+                    "; ".join(data.get("uw_reasons") or []) or "Inside appetite.",
+                    tone_for_quote(data),
+                ),
+                unsafe_allow_html=True,
+            )
             st.progress(
                 min(max(data["risk_score"] / 100.0, 0.0), 1.0),
                 text=f"Behavioral risk score {data['risk_score']}/100",
@@ -451,9 +693,23 @@ with quote_tab:
                 st.warning(anomaly)
             satellite = data.get("satellite")
             if satellite:
-                st.info(
-                    f"NDVI {satellite['ndvi_index']} · NDWI {satellite['ndwi_index']} · "
-                    f"{satellite['satellite_source']}"
+                source = str(satellite.get("satellite_source") or "local")
+                if satellite.get("sentinel_live_fetch"):
+                    chip = "live"
+                    label = "LIVE"
+                elif source == "local_fallback":
+                    chip = "fallback"
+                    label = "FALLBACK"
+                else:
+                    chip = "local"
+                    label = "LOCAL"
+                extra = satellite.get("sentinel_live_error") or ""
+                st.markdown(
+                    f'<p><span class="chip {chip}">{label}</span> '
+                    f'NDVI {satellite["ndvi_index"]} · NDWI {satellite["ndwi_index"]} · '
+                    f'{source}'
+                    f'{(" · " + extra) if extra else ""}</p>',
+                    unsafe_allow_html=True,
                 )
             st.markdown("**Factor attribution**")
             reasons = data.get("attribution_reasons") or []
@@ -466,6 +722,23 @@ with quote_tab:
                 st.markdown("**Actions for the policyholder**")
                 for tip in data["recommendations"]:
                     st.write(f"- {tip}")
+            lines = data.get("lines") or {}
+            if lines:
+                st.markdown("**Lines**")
+                st.dataframe(
+                    [
+                        {
+                            "line": item.get("line"),
+                            "risk": item.get("risk_score"),
+                            "premium": item.get("final_bounded_premium"),
+                            "clamped": item.get("rate_clamped"),
+                        }
+                        for item in lines.values()
+                    ],
+                    width="stretch",
+                    hide_index=True,
+                )
+                st.caption(f"Account premium ${data.get('account_premium', data['final_bounded_premium']):.2f}")
             decisions = data.get("decisions") or []
             if decisions:
                 st.markdown("**Decisions**")
@@ -501,6 +774,194 @@ with quote_tab:
         )
     )
 
+with desk_tab:
+    st.subheader("Underwriter decision desk")
+    desk_quote = st.session_state.get("last_quote")
+    if not desk_quote:
+        st.info("Price a policy on the Quote tab first. The appetite recommendation appears here.")
+    else:
+        st.markdown(
+            banner_html(
+                f"{desk_quote.get('policy_id')} · {str(desk_quote.get('uw_recommendation', '')).upper()}",
+                f"Trace {desk_quote.get('trace_id', '')}. "
+                + "; ".join(desk_quote.get("uw_reasons") or []),
+                tone_for_quote(desk_quote),
+            ),
+            unsafe_allow_html=True,
+        )
+        for reason in desk_quote.get("uw_reasons") or []:
+            st.write(f"- {reason}")
+        st.text_input("Underwriter", key="uw_underwriter")
+        st.text_area("Note", key="uw_note")
+        accept_col, refer_col, decline_col = st.columns(3)
+        desk_action = None
+        with accept_col:
+            if st.button("Accept / bind", key="uw_accept", type="primary", width="stretch"):
+                desk_action = "accept"
+        with refer_col:
+            if st.button("Refer", key="uw_refer", type="primary", width="stretch"):
+                desk_action = "refer"
+        with decline_col:
+            if st.button("Decline", key="uw_decline", type="primary", width="stretch"):
+                desk_action = "decline"
+        if desk_action:
+            try:
+                resp = requests.post(
+                    f"{API_URL}/api/v1/uw/decision",
+                    json={
+                        "policy_id": desk_quote.get("policy_id"),
+                        "quote_trace_id": desk_quote.get("trace_id", ""),
+                        "action": desk_action,
+                        "underwriter": st.session_state.uw_underwriter,
+                        "note": st.session_state.uw_note,
+                        "submission_id": (st.session_state.get("submission") or {}).get(
+                            "submission_id", ""
+                        )
+                        if desk_quote.get("policy_id")
+                        == (st.session_state.get("submission") or {}).get("policy_id")
+                        else "",
+                    },
+                    headers=api_headers(),
+                    timeout=15,
+                )
+                if resp.status_code == 200:
+                    entry = resp.json()
+                    st.session_state.desk_message = (
+                        f"Decision {entry['action']} recorded. Status {entry['uw_status']}."
+                        + (" Override of appetite." if entry.get("override") else "")
+                    )
+                else:
+                    detail = resp.text
+                    try:
+                        detail = resp.json().get("detail", detail)
+                    except Exception:
+                        pass
+                    st.session_state.desk_message = format_api_detail(detail)
+            except Exception as exc:
+                st.session_state.desk_message = f"Could not reach the API: {exc}"
+        if st.session_state.get("desk_message"):
+            st.info(st.session_state.desk_message)
+        try:
+            packet_resp = requests.get(
+                f"{API_URL}/api/v1/uw/packet/{quote(str(desk_quote.get('policy_id')), safe='')}",
+                headers=api_headers(),
+                timeout=10,
+            )
+            if packet_resp.status_code == 200:
+                import json as _json
+
+                st.download_button(
+                    "Download quote packet (JSON)",
+                    data=_json.dumps(packet_resp.json(), indent=2),
+                    file_name=f"packet-{desk_quote.get('policy_id')}.json",
+                    mime="application/json",
+                )
+        except Exception:
+            pass
+    st.subheader("Open referrals")
+    try:
+        refs = requests.get(
+            f"{API_URL}/api/v1/uw/referrals", headers=api_headers(), timeout=10
+        )
+        referrals = refs.json().get("referrals") or [] if refs.status_code == 200 else []
+    except Exception:
+        referrals = []
+    if referrals:
+        st.dataframe(referrals, width="stretch", hide_index=True)
+    else:
+        st.info("No open referrals on this process yet.")
+
+with intake_tab:
+    st.subheader("Submission intake")
+    st.write("ACORD-like JSON intake (not ACORD XML). Missing required documents block bind, not quoting.")
+    st.text_input("Broker name", key="broker_name")
+    st.text_input("Agency", key="broker_agency")
+    st.checkbox("Agent of record (AOR)", key="broker_aor")
+    st.text_input("Effective date", key="effective_date")
+    st.markdown("**Documents**")
+    st.checkbox("ACORD 125 received", key="doc_acord_125")
+    st.checkbox("Loss runs received", key="doc_loss_runs")
+    st.checkbox("SOV received", key="doc_sov")
+    create_col, quote_col = st.columns(2)
+    with create_col:
+        do_create_sub = st.button("Create submission", key="create_sub", type="primary", width="stretch")
+    with quote_col:
+        do_quote_sub = st.button("Quote submission", key="quote_sub", type="primary", width="stretch")
+    if do_create_sub:
+        current = build_quote_payload()
+        sub_lines = current.get("lines") or {
+            "auto": {k: v for k, v in current.items() if k != "policy_id"}
+        }
+        docs = [
+            {"name": "acord_125", "status": "received" if st.session_state.doc_acord_125 else "missing"},
+            {"name": "loss_runs", "status": "received" if st.session_state.doc_loss_runs else "missing"},
+            {"name": "sov", "status": "received" if st.session_state.doc_sov else "missing"},
+        ]
+        try:
+            resp = requests.post(
+                f"{API_URL}/api/v1/submissions",
+                json={
+                    "policy_id": st.session_state.policy_id,
+                    "broker": {
+                        "name": st.session_state.broker_name,
+                        "agency": st.session_state.broker_agency,
+                        "aor": st.session_state.broker_aor,
+                    },
+                    "effective_date": st.session_state.effective_date,
+                    "lines": sub_lines,
+                    "model_route": st.session_state.model_route,
+                    "documents": docs,
+                    "losses": [],
+                },
+                headers=api_headers(),
+                timeout=15,
+            )
+            if resp.status_code == 200:
+                st.session_state.submission = resp.json()
+                st.session_state.intake_message = (
+                    f"Submission {resp.json()['submission_id']} is {resp.json()['status']}."
+                )
+            else:
+                detail = resp.text
+                try:
+                    detail = resp.json().get("detail", detail)
+                except Exception:
+                    pass
+                st.session_state.intake_message = format_api_detail(detail)
+        except Exception as exc:
+            st.session_state.intake_message = f"Could not reach the API: {exc}"
+    if do_quote_sub:
+        sub = st.session_state.get("submission") or {}
+        if not sub.get("submission_id"):
+            st.session_state.intake_message = "Create a submission first."
+        else:
+            try:
+                resp = requests.post(
+                    f"{API_URL}/api/v1/submissions/{quote(sub['submission_id'], safe='')}/quote",
+                    headers=api_headers(),
+                    timeout=30,
+                )
+                if resp.status_code == 200:
+                    body = resp.json()
+                    st.session_state.submission = body["submission"]
+                    st.session_state.last_quote = body["quote"]
+                    st.session_state.intake_message = (
+                        f"Quoted. Submission is {body['submission']['status']}."
+                    )
+                else:
+                    detail = resp.text
+                    try:
+                        detail = resp.json().get("detail", detail)
+                    except Exception:
+                        pass
+                    st.session_state.intake_message = format_api_detail(detail)
+            except Exception as exc:
+                st.session_state.intake_message = f"Could not reach the API: {exc}"
+    if st.session_state.get("intake_message"):
+        st.info(st.session_state.intake_message)
+    if st.session_state.get("submission"):
+        st.json(st.session_state.submission)
+
 with controls_tab:
     st.subheader("Guardrails and ingest")
     st.write(
@@ -514,25 +975,7 @@ with controls_tab:
             "Try prohibited key", key="prohibited", type="primary", width="stretch"
         )
 
-    form_payload = {
-        "policy_id": st.session_state.policy_id,
-        "hard_brakes_per_100mi": st.session_state.hard_brakes,
-        "night_miles_pct": st.session_state.night_pct_ui / 100.0,
-        "speed_violations": int(st.session_state.speed_violations),
-        "total_miles": st.session_state.total_miles,
-        "previous_premium": st.session_state.prev_premium,
-        "iot_moisture": st.session_state.moisture_pct / 100.0,
-        "weather_precip_mm": st.session_state.precip_mm,
-        "weather_wind_mph": st.session_state.wind_mph,
-        "model_route": st.session_state.model_route,
-    }
-    if st.session_state.use_bbox:
-        form_payload["bbox"] = [
-            st.session_state.min_lon,
-            st.session_state.min_lat,
-            st.session_state.max_lon,
-            st.session_state.max_lat,
-        ]
+    form_payload = build_quote_payload()
 
     if do_ingest:
         try:
