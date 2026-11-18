@@ -1,3 +1,5 @@
+"""UW desk JSONL: quote snapshots, human decisions, notes, packets."""
+
 import json
 from datetime import datetime, timezone
 from pathlib import Path

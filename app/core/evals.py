@@ -1,3 +1,5 @@
+"""Explanation gates: prohibited terms, factor coverage, Flesch reading ease."""
+
 import re
 from typing import Any, Dict, List
 
@@ -76,6 +78,7 @@ def policyholder_text(reasons: List[str]) -> str:
 
 
 def evaluate_explanation(text: str, risk_drivers: List[str]) -> Dict[str, Any]:
+    """Fail the quote if the explanation leaks, skips factors, or is too hard to read."""
     leaks = prohibited_term_leak_count(text)
     coverage = factor_coverage(text, risk_drivers)
     readability = flesch_kincaid(text)

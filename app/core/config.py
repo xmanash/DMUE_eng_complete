@@ -1,3 +1,5 @@
+"""Process settings. Values come from the environment and optional `.env`."""
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Keys that must never enter rating, memory, or policyholder text.
@@ -55,7 +57,7 @@ class Settings(BaseSettings):
     SENTINEL_LIVE_FETCH: bool = False
     SENTINEL_CLIENT_ID: str = ""
     SENTINEL_CLIENT_SECRET: str = ""
-    SENTINEL_API_TOKEN: str = ""
+    SENTINEL_API_TOKEN: str = ""  # alias for CLIENT_SECRET when CLIENT_ID is set
     SENTINEL_OAUTH_URL: str = (
         "https://services.sentinel-hub.com/auth/realms/main/protocol/openid-connect/token"
     )
@@ -71,7 +73,7 @@ class Settings(BaseSettings):
     AUTH_REQUIRED: bool = False
     CORS_ALLOW_ORIGINS: str = ""
 
-    UW_REFER_SCORE: float = 80.0
+    UW_REFER_SCORE: float = 80.0  # appetite only; does not change premium
     UW_DECLINE_SCORE: float = 95.0
     UW_LOG_PATH: str = "./data/uw/actions.jsonl"
     SUBMISSIONS_LOG_PATH: str = "./data/uw/submissions.jsonl"

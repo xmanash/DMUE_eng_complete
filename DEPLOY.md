@@ -1,5 +1,9 @@
 # Single-node deployment
 
+A **GitHub Codespace** is the fastest public HTTPS URL from this repository. Open [Codespaces for xmanash/DMUE_eng_complete](https://codespaces.new/xmanash/DMUE_eng_complete?quickstart=1). Ports `8000` and `8501` are forwarded. Treat that URL as a demo, not a filed production bind: no TLS terminator of your own, and `DMUE_ENV=demo` does not require an API key.
+
+## VM deployment
+
 This stack is one VM: FastAPI, Streamlit, and a Chroma directory. Rate limit, cost, traces, and ingest jobs are **per process**. Do not scale `dmue-api` until those stores are shared.
 
 Chroma stays a local directory (`CHROMA_PERSIST_DIR`). That is enough for a demo VM. High availability needs a hosted store; that is a later change. The image runs as uid `10001`. The host `./data` bind mount must be writable by that user.

@@ -1,3 +1,5 @@
+"""ACORD-like intake. Missing docs block bind, not quoting."""
+
 import json
 import uuid
 from datetime import datetime, timezone

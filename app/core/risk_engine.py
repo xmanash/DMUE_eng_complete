@@ -1,3 +1,5 @@
+"""Telematics score 0–100 and premium = base * (0.7 + score/100 * 0.8)."""
+
 import numpy as np
 from typing import Any, Dict, List, Tuple
 
@@ -5,6 +7,8 @@ from app.core.config import settings
 
 
 class DynamicRiskEngine:
+    """Deterministic telematics scoring. No ZIP, credit, or protected-class inputs."""
+
     def __init__(self, base_premium: float = 120.0):
         self.base_premium = base_premium
 
@@ -51,6 +55,7 @@ class DynamicRiskEngine:
         telemetry: Dict[str, Any],
         reasons: List[str],
     ) -> Tuple[float, float, List[str]]:
+        """Moisture, wind, rain deltas. Missing signals are skipped, not zeroed."""
         updated = list(reasons)
         score = float(risk_score)
 

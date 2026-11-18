@@ -1,0 +1,30 @@
+{
+  "name": "DMUE",
+  "image": "mcr.microsoft.com/devcontainers/python:3.11",
+  "forwardPorts": [8000, 8501],
+  "portsAttributes": {
+    "8000": {
+      "label": "DMUE API",
+      "onAutoForward": "notify",
+      "visibility": "public"
+    },
+    "8501": {
+      "label": "DMUE Console",
+      "onAutoForward": "openBrowser",
+      "visibility": "public"
+    }
+  },
+  "postCreateCommand": "pip install --user -r requirements.txt",
+  "postStartCommand": "bash .devcontainer/start.sh",
+  "remoteEnv": {
+    "DMUE_ENV": "demo",
+    "DMUE_API_URL": "http://127.0.0.1:8000"
+  },
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python"
+      }
+    }
+  }
+}

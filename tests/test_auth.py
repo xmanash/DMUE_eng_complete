@@ -1,9 +1,25 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from app.core.auth import cors_origins, github_codespace_origins
 from app.core.config import settings
 from app.core.ratelimit import limiter
 from app.main import app
+
+
+def test_codespace_origins_from_env(monkeypatch):
+    monkeypatch.delenv("CODESPACE_NAME", raising=False)
+    monkeypatch.delenv("GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN", raising=False)
+    assert github_codespace_origins() == []
+    monkeypatch.setenv("CODESPACE_NAME", "fuzzy-space-123")
+    monkeypatch.setenv("GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN", "app.github.dev")
+    origins = github_codespace_origins()
+    assert origins == [
+        "https://fuzzy-space-123-8000.app.github.dev",
+        "https://fuzzy-space-123-8501.app.github.dev",
+    ]
+    combined = cors_origins()
+    assert "https://fuzzy-space-123-8501.app.github.dev" in combined
 
 
 def test_ops_open_without_api_key():

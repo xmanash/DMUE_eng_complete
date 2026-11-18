@@ -1,3 +1,5 @@
+"""JSON-RPC 2.0 stdio MCP: reprice and recall. Not a live carrier integration."""
+
 import json
 import sys
 from typing import Optional

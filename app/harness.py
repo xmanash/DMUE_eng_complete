@@ -1,3 +1,5 @@
+"""Offline acceptance cases. No network. Exit 0 only if every case passes."""
+
 import json
 import sys
 import tempfile

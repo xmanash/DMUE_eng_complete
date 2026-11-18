@@ -1,3 +1,5 @@
+"""In-process TTL cache. Not shared across uvicorn workers."""
+
 import time
 from typing import Any, Hashable, Optional
 
@@ -5,6 +7,8 @@ from app.core.config import settings
 
 
 class TtlCache:
+    """Monotonic-clock TTL map. Expired keys drop on read."""
+
     def __init__(self, ttl_seconds: float | None = None):
         self.ttl = float(ttl_seconds if ttl_seconds is not None else settings.CACHE_TTL_SECONDS)
         self._store: dict[Hashable, tuple[float, Any]] = {}

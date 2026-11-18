@@ -1,3 +1,5 @@
+"""Underwriter console. Talks to the API; does not price locally."""
+
 import os
 import sys
 import time
@@ -9,6 +11,7 @@ import pandas as pd
 import requests
 import streamlit as st
 
+# streamlit run app/ui/dashboard.py does not put the repo root on sys.path.
 _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))

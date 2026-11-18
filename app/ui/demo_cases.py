@@ -29,6 +29,7 @@ BASE = {
 
 
 def _case(case_id: str, label: str, tone: str, blurb: str, **fields) -> Dict[str, Any]:
+    """Merge overrides onto BASE and stamp policy_id."""
     merged = deepcopy(BASE)
     merged.update(fields)
     merged["policy_id"] = case_id
@@ -259,6 +260,7 @@ def payload_from_fields(fields: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def tone_for_quote(data: Dict[str, Any]) -> str:
+    """UI color: decline > clamp > sensor > refer/accept."""
     rec = str((data or {}).get("uw_recommendation") or "")
     if rec == "decline":
         return "decline"

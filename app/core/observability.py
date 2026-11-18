@@ -1,3 +1,5 @@
+"""Local JSONL traces always on. LangSmith export is optional and never blocks a quote."""
+
 import json
 import logging
 import threading

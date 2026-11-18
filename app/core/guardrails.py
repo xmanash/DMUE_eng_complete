@@ -1,3 +1,5 @@
+"""Physical bounds, sensor-fault filter, filing-band clamp, prohibited keys."""
+
 import math
 from typing import Any, Dict, List, Tuple
 
@@ -6,6 +8,8 @@ from app.core.evals import prohibited_term_leak_count
 
 
 class ActuarialGuardrailEnforcer:
+    """Reject bad inputs, neutralize sensor faults, clamp vs previous_premium."""
+
     def __init__(self):
         self.max_increase = settings.MAX_PREMIUM_INCREASE_PCT
         self.max_decrease = settings.MAX_PREMIUM_DECREASE_PCT

@@ -1,3 +1,5 @@
+"""HTTP API: quote, ingest, UW desk, submissions, ops. One worker for a demo."""
+
 import asyncio
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
@@ -48,11 +50,12 @@ def _run_quote(payload: Dict[str, Any]) -> Dict[str, Any]:
     try:
         uw_store.record_quote(result)
     except Exception:
-        pass
+        pass  # desk snapshot is best-effort; pricing already succeeded
     return result
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
+    """Token bucket on /api/v1 only."""
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
         if path.startswith("/api/v1/"):
@@ -67,6 +70,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
 
 class ApiKeyMiddleware(BaseHTTPMiddleware):
+    """Require X-API-Key or Bearer when a key is configured."""
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
         if path in OPEN_PATHS or not path.startswith("/api/v1/"):

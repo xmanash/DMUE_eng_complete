@@ -1,3 +1,5 @@
+"""Chroma quote history. Embeddings are a local SHA-256 hash, not a downloaded model."""
+
 import hashlib
 import os
 import uuid

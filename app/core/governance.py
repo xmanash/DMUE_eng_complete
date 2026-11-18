@@ -1,3 +1,5 @@
+"""Quote JSONL audit and structured decision records."""
+
 import json
 import logging
 from datetime import datetime, timezone

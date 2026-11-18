@@ -8,6 +8,16 @@ DMUE prices from behavior instead. It accepts telematics, home moisture, weather
 
 The product spec is [PRD.md](PRD.md). The request path is [Architecture.md](Architecture.md). Month-over-month premiums stay inside **+25% / −20%** of the prior premium.
 
+## Run from GitHub (external URL)
+
+Open this repo in GitHub Codespaces. After the container starts, GitHub forwards HTTPS URLs for the API (`8000`) and the console (`8501`). The console tab usually opens on its own.
+
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/xmanash/DMUE_eng_complete?quickstart=1)
+
+Or: **Code → Codespaces → Create codespace on main**. Wait for `postStart` to finish, then open the **Ports** panel and the `8501` URL (set visibility to **Public** if the page asks you to sign in).
+
+The dashboard still calls the API on `http://127.0.0.1:8000` inside the codespace. You do not paste a Hub token for a basic demo. This is a forwarded demo URL, not a production bind. See [DEPLOY.md](DEPLOY.md).
+
 ## What you can run
 
 - HTTP API on port **8000**

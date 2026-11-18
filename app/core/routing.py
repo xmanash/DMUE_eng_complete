@@ -1,3 +1,5 @@
+"""Model routes and unit costs. Satellite adds a $0.0005 surcharge when used."""
+
 from typing import Any, Dict, Optional
 
 from app.core.config import settings

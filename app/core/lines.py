@@ -1,3 +1,5 @@
+"""Thin home and commercial line stubs. Auto math stays in quote_policy."""
+
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -101,5 +103,6 @@ def price_commercial(
         "tiv": tiv,
     }
     if occupancy == "excluded":
+        # Appetite decline only. Filing-band premium is still returned.
         result["hard_decline_reasons"] = ["Commercial occupancy is excluded from appetite."]
     return result

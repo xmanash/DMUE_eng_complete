@@ -1,3 +1,5 @@
+"""Quote pipeline: guardrails, score, optional satellite, clamp, evals, appetite."""
+
 from time import perf_counter
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -104,6 +106,8 @@ def quote_policy(
     bbox = cleaned.get("bbox") if route["use_satellite"] else None
     want_live = should_use_live_sentinel(payload.get("sentinel_live"))
     if bbox:
+        # Open circuit skips satellite unless live was requested, then Hub is skipped
+        # and local bands still run.
         if breaker.is_open() and not want_live:
             decisions.append(decision("runtime", "satellite_circuit", "open"))
         else:
@@ -242,6 +246,7 @@ def _quote_multi_line(
     hooks: Optional[Sequence[Any]] = None,
     circuit: Optional[CircuitBreaker] = None,
 ) -> Dict[str, Any]:
+    """Price auto/home/commercial independently; account premium is the sum."""
     policy_id = str(payload.get("policy_id") or "").strip()
     if not policy_id:
         raise ValueError("policy_id is required")

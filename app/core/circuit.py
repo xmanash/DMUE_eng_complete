@@ -1,9 +1,13 @@
+"""Fail-open satellite breaker. Telematics still score while open."""
+
 import time
 
 from app.core.config import settings
 
 
 class CircuitBreaker:
+    """Open after N failures; auto-reset after cooldown."""
+
     def __init__(
         self,
         failures: int | None = None,

@@ -1,3 +1,5 @@
+"""Per-IP token bucket for /api/v1. Health GET / is not limited."""
+
 import time
 from typing import Dict, Tuple
 

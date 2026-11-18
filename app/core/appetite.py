@@ -1,3 +1,5 @@
+"""Accept / refer / decline from score and flags. Never changes premium."""
+
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.config import settings
@@ -33,6 +35,7 @@ def evaluate_appetite(
         return "decline", [
             f"Risk score {score:.0f} is at or above the decline threshold."
         ] + [r for r in reasons if "Risk score" not in r]
+    # Clamp, low NDVI, or sensor fault refer even when score is below 80.
     if score >= settings.UW_REFER_SCORE or reasons:
         return "refer", reasons
     return "accept", ["Inside appetite."]

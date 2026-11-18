@@ -1,3 +1,5 @@
+"""In-process ingest queue. One worker; 503 when full."""
+
 import asyncio
 import uuid
 from typing import Any, Awaitable, Callable, Dict, List, Optional
@@ -12,6 +14,8 @@ class JobQueueFull(Exception):
 
 
 class JobManager:
+    """Async ingest jobs keyed by id. Status lives in this process only."""
+
     def __init__(self, maxsize: int | None = None):
         self.maxsize = int(maxsize if maxsize is not None else settings.INGEST_QUEUE_MAX)
         self.queue: asyncio.Queue[str] = asyncio.Queue(maxsize=self.maxsize)
